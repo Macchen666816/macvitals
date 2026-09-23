@@ -1,5 +1,7 @@
 # MacVitals
 
+[简体中文](README.md) | [English](README_EN.md)
+
 > SSH-first live system monitor for Apple Silicon Macs.
 
 面向 Apple Silicon Mac 的终端性能监视器。通过本机终端或 SSH，查看 CPU、GPU、内存、进程、硬件温度与风扇转速。
