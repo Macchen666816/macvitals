@@ -24,6 +24,31 @@ MacVitals 不是 Stats、Activity Monitor 或其他桌面 GUI 监视器的替代
 
 界面沿用分块仪表盘设计：青色 CPU、紫色 GPU、绿色内存，配合使用率条、温度强调和趋势图。宽屏双栏、窄屏单栏，所有页面均可滚动。
 
+## 界面预览
+
+![MacVitals 总览](docs/assets/macvitals-overview.png)
+
+<details>
+<summary>查看更多页面 / More views</summary>
+
+### CPU
+
+![MacVitals CPU 页面](docs/assets/macvitals-cpu.png)
+
+### GPU
+
+![MacVitals GPU 页面](docs/assets/macvitals-gpu.png)
+
+### 内存
+
+![MacVitals 内存页面](docs/assets/macvitals-memory.png)
+
+### 传感器
+
+![MacVitals 传感器页面](docs/assets/macvitals-sensors.png)
+
+</details>
+
 ## 运行
 
 在项目根目录执行：
