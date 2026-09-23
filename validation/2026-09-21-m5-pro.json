@@ -1,0 +1,247 @@
+{
+  "version": "1.3.0",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "system": {
+    "chip": "Apple M5 Pro",
+    "cpu_cores_p": 12,
+    "cpu_cores_e": 0,
+    "total_cores": 18,
+    "ram_gb": 64,
+    "model": "Mac17,8",
+    "model_id": "Mac17,8",
+    "core_groups": [
+      [
+        "超级核心",
+        6
+      ],
+      [
+        "性能核心",
+        12
+      ]
+    ],
+    "cpu_cores_s": 6
+  },
+  "source_status": {
+    "cpu": "ok",
+    "memory": "ok",
+    "swap": "ok",
+    "memory_pressure": "ok",
+    "disk": "ok",
+    "network": "ok",
+    "thermal": "unavailable",
+    "sensors": "ok",
+    "processes": "ok",
+    "uptime": "ok",
+    "disk_capacity": "ok"
+  },
+  "powermetrics": {
+    "status": "未启用（功率/频率需要 sudo）",
+    "fields": [],
+    "error": ""
+  },
+  "cpu": {
+    "user": 5.087281795511222,
+    "sys": 3.2418952618453867,
+    "idle": 91.6708229426434,
+    "load_1m": 1.8388671875,
+    "load_5m": 2.486328125,
+    "load_15m": 3.2958984375,
+    "per_core": [],
+    "p_freq_mhz": null,
+    "e_freq_mhz": null,
+    "power_w": null,
+    "temp_c": 40.884548611111114,
+    "cluster_freqs": null
+  },
+  "gpu": {
+    "freq_mhz": null,
+    "power_w": null,
+    "temp_c": 38.247767857142854,
+    "usage_pct": null,
+    "active": null
+  },
+  "memory": {
+    "total_gb": 64,
+    "used_gb": 36.80235290527344,
+    "cached_gb": 12.878860473632812,
+    "free_gb": 13.980560302734375,
+    "swap_used_gb": 0,
+    "swap_total_gb": 0,
+    "compressed_gb": 4.057586669921875,
+    "wired_gb": 3.90283203125,
+    "app_memory_gb": 28.841934204101562,
+    "available_gb": 27.197647094726562,
+    "pressure_level": "Normal"
+  },
+  "disk": {
+    "read_mb_s": 0,
+    "write_mb_s": 0.2131314384668007,
+    "read_ops": 0,
+    "write_ops": 5.366719499754194,
+    "root_total_gb": 926.3028907775879,
+    "root_used_gb": 341.70502853393555,
+    "root_avail_gb": 584.5978622436523,
+    "root_pct": 36.8891247059685
+  },
+  "network": {
+    "interface": "en0",
+    "in_mb_s": 0.024240802997255905,
+    "out_mb_s": 0.9609592670205354,
+    "in_packets": 120137698,
+    "out_packets": 27284469
+  },
+  "thermal": {
+    "cpu_warning": false,
+    "cpu_nominal": false,
+    "gpu_warning": false,
+    "scheduler_limit": false,
+    "thermal_pressure": null,
+    "sensors": [
+      [
+        "CPU 超级核测点 1",
+        41.90625
+      ],
+      [
+        "CPU 超级核测点 2",
+        41.171875
+      ],
+      [
+        "CPU 超级核测点 3",
+        41.171875
+      ],
+      [
+        "CPU 超级核测点 4",
+        42.125
+      ],
+      [
+        "CPU 超级核测点 5",
+        40.84375
+      ],
+      [
+        "CPU 超级核测点 6",
+        40.359375
+      ],
+      [
+        "CPU 性能核测点 1",
+        41.265625
+      ],
+      [
+        "CPU 性能核测点 2",
+        40.796875
+      ],
+      [
+        "CPU 性能核测点 3",
+        40.578125
+      ],
+      [
+        "CPU 性能核测点 4",
+        40.90625
+      ],
+      [
+        "CPU 性能核测点 5",
+        40.375
+      ],
+      [
+        "CPU 性能核测点 6",
+        40.78125
+      ],
+      [
+        "CPU 性能核测点 7",
+        40.890625
+      ],
+      [
+        "CPU 性能核测点 8",
+        40.03125
+      ],
+      [
+        "CPU 性能核测点 9",
+        40.609375
+      ],
+      [
+        "CPU 性能核测点 10",
+        41.09375
+      ],
+      [
+        "CPU 性能核测点 11",
+        40.734375
+      ],
+      [
+        "CPU 性能核测点 12",
+        40.28125
+      ],
+      [
+        "GPU 测点 1",
+        38.375
+      ],
+      [
+        "GPU 测点 2",
+        38.21875
+      ],
+      [
+        "GPU 测点 3",
+        38.265625
+      ],
+      [
+        "GPU 测点 4",
+        38.203125
+      ],
+      [
+        "GPU 测点 5",
+        38.171875
+      ],
+      [
+        "GPU 测点 6",
+        38.265625
+      ],
+      [
+        "GPU 测点 7",
+        38.234375
+      ],
+      [
+        "SSD 闪存",
+        32.2578125
+      ],
+      [
+        "Wi-Fi",
+        37.66667175292969
+      ],
+      [
+        "左掌托",
+        30.6875
+      ],
+      [
+        "右掌托",
+        29.625
+      ],
+      [
+        "左侧气流",
+        37.013519287109375
+      ],
+      [
+        "右侧气流",
+        37.7747802734375
+      ],
+      [
+        "电池",
+        30.41
+      ]
+    ],
+    "fans": [
+      [
+        "左风扇",
+        0
+      ],
+      [
+        "右风扇",
+        0
+      ]
+    ]
+  },
+  "process_count": 1035,
+  "sampled_at": 1789996636.92401,
+  "collection_seconds": 0.098100042,
+  "notes": [
+    "Unavailable measurements are null; source_status describes each collector.",
+    "Process names/command lines are omitted from this diagnostic report."
+  ]
+}

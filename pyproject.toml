@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "macvitals"
+version = "1.4.0"
+description = "SSH-first live system monitor for Apple Silicon Macs"
+readme = "README.md"
+license = "LicenseRef-MacVitals-NC-SA-1.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+dependencies = []
+classifiers = ["Operating System :: MacOS", "Programming Language :: Python :: 3"]
+
+[project.scripts]
+macvitals = "macvitals.macvitals:entry_point"
+
+[tool.setuptools.packages.find]
+include = ["macvitals*"]

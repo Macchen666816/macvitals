@@ -1,0 +1,80 @@
+MacVitals Non-Commercial Share-Alike License
+Version 1.0 - 2026
+
+Copyright (c) 2026 Chen Yixuan
+
+This license is a project-specific copyright license. It is not an OSI
+Approved Open Source License. It is intended to keep MacVitals freely
+available for personal, educational, research, community, and other
+non-commercial use while requiring public source sharing for modified
+redistributions.
+
+1. Definitions
+
+"Software" means this MacVitals project, including its source code,
+documentation, and accompanying files distributed under this license.
+
+"Modified Software" means the Software or a substantial portion of it that
+has been changed, extended, translated, ported, or combined with code that
+forms a derivative work.
+
+"Commercial Use" means using, distributing, hosting, sublicensing, selling,
+or bundling the Software or Modified Software in exchange for money or other
+commercial consideration, or as a material part of a paid product, paid
+service, advertisement-supported service, or revenue-generating offering.
+
+Free internal use by an organization is permitted when the Software is not
+sold, charged for, bundled into a paid offering, or provided as part of a paid
+service.
+
+2. Permission
+
+Permission is granted, free of charge, to any person obtaining a copy of the
+Software to use, study, copy, modify, and share the Software for
+non-commercial purposes, subject to the conditions below.
+
+3. Share-Alike and Source Availability
+
+You may distribute or make Modified Software available to other persons only
+if all of the following conditions are met:
+
+  a. You provide the complete corresponding source code, including your
+     modifications and any scripts or build instructions needed to reproduce
+     the distributed version.
+
+  b. You license the Modified Software under this same license, without
+     adding restrictions that conflict with it.
+
+  c. You retain this license, the original copyright notice, and a clear
+     notice describing the changes and identifying the maintainer of the
+     Modified Software.
+
+  d. You do not represent the Modified Software as an official release of
+     MacVitals, and you do not use the MacVitals name or marks
+     to imply endorsement without permission.
+
+The source code may be published in the same place as the Modified Software
+or through a clearly identified, no-charge source link that remains available
+for a reasonable period.
+
+4. Restrictions
+
+Commercial Use is not permitted under this license. You may not sell the
+Software or Modified Software, charge for access to it, include it in a paid
+product or service, or use it to provide a paid monitoring or hosting service.
+
+5. No Additional Rights
+
+Except for the permissions expressly granted by this license, all rights are
+reserved by the copyright holder. This license does not grant trademark,
+patent, or endorsement rights.
+
+6. Disclaimer and Limitation of Liability
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

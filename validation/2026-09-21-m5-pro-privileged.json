@@ -1,0 +1,107 @@
+{
+  "diagnostic_powermetrics": {
+    "status": "正在采集（仅显示可用字段）",
+    "fields": [
+      "ane_power",
+      "cluster_freqs",
+      "cpu_power",
+      "gpu_active",
+      "gpu_freq",
+      "gpu_power",
+      "gpu_usage",
+      "thermal_pressure"
+    ],
+    "error": ""
+  },
+  "same_frame": {
+    "clusters_mhz": {
+      "P0": 1421,
+      "P1": 1344,
+      "S": 4500
+    },
+    "gpu_mhz": 338,
+    "gpu_active_percent": 29.5,
+    "cpu_w": 6.774,
+    "gpu_w": 0.143,
+    "ane_w": 0,
+    "gpu_power_raw_occurrences": [
+      "143 mW",
+      "144 mW"
+    ],
+    "thermal": "Nominal",
+    "matched": true
+  },
+  "stream": [
+    {
+      "interval": 0.5,
+      "complete_updates": 3,
+      "fields": [
+        "ane_power",
+        "cluster_freqs",
+        "cpu_power",
+        "gpu_active",
+        "gpu_freq",
+        "gpu_power",
+        "gpu_usage",
+        "thermal_pressure"
+      ]
+    },
+    {
+      "interval": 1,
+      "complete_updates": 3,
+      "fields": [
+        "ane_power",
+        "cluster_freqs",
+        "cpu_power",
+        "gpu_active",
+        "gpu_freq",
+        "gpu_power",
+        "gpu_usage",
+        "thermal_pressure"
+      ]
+    }
+  ],
+  "single_core_worker": {
+    "cpu_percent": 5.555360237025852,
+    "full_core_reference_percent": 5.555555555555555
+  },
+  "source_status": {
+    "cpu": "ok",
+    "memory": "ok",
+    "swap": "ok",
+    "memory_pressure": "ok",
+    "disk": "ok",
+    "network": "ok",
+    "thermal": "unavailable",
+    "sensors": "ok",
+    "processes": "ok",
+    "uptime": "ok",
+    "disk_capacity": "ok"
+  },
+  "temperature_means_c": {
+    "cpu": 45.638888888888886,
+    "gpu": 39.35267857142857
+  },
+  "fans_rpm": [
+    [
+      "左风扇",
+      0
+    ],
+    [
+      "右风扇",
+      0
+    ]
+  ],
+  "context": {
+    "date": "2026-09-21",
+    "version": "1.3.2",
+    "chip": "Apple M5 Pro",
+    "model": "Mac17,8",
+    "os": "macOS 26.6.2",
+    "notes": [
+      "GPU power uses first occurrence in CPU/GPU/ANE summary; GPU section can differ slightly and is not added twice.",
+      "source_status and temperature/fans come from a separate basic collector without powermetrics.",
+      "Checks confirm software readings and conversions, not physical calibration of sensors or Apple's power estimates."
+    ]
+  }
+}
