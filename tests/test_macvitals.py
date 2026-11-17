@@ -190,6 +190,9 @@ class UITests(unittest.TestCase):
         ui.page = macvitals.MonitorUI.PAGE_OVERVIEW
         ui.paused = False
         ui.process_sort = "cpu"
+        ui.process_view = "apps"
+        ui.app_selected_key = ""
+        ui.app_expanded = False
         ui.sensor_scroll = 0
         return ui
 

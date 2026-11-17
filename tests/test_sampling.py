@@ -23,6 +23,32 @@ def collector():
 
 
 class SamplingTests(unittest.TestCase):
+    def test_native_process_partial_snapshot_is_published_without_ps(self):
+        c = collector()
+        c._process_reader = mock.Mock()
+        process = monitor.ProcessInfo(pid=11, name="member", mem_mb=4.)
+        sample = monitor.ProcessSnapshot(status="partial", processes=[process],
+                                         enumerated_count=2, readable_count=1, denied_count=1)
+        c._process_reader.collect.return_value = sample
+        with mock.patch.object(monitor.subprocess, 'check_output') as ps:
+            c._collect_processes()
+        self.assertIs(c.data.process_sample, sample)
+        self.assertEqual(c.data.source_status['processes'], 'partial')
+        self.assertEqual(c.data.processes, [process])
+        ps.assert_not_called()
+
+    def test_native_process_failure_falls_back_without_stale_app_totals(self):
+        c = collector()
+        c._process_reader = mock.Mock()
+        c._process_reader.collect.side_effect = monitor.ProcessUnavailable("enumeration failed")
+        c.data.process_sample.apps = [object()]
+        row = b'42 Mon Sep 21 10:00:00 2026 0:01.00 131072 /App Name\n'
+        with mock.patch.object(monitor.subprocess, 'check_output', return_value=row):
+            c._collect_processes()
+        self.assertEqual(c.data.process_sample.memory_kind, 'rss')
+        self.assertEqual(c.data.process_sample.apps, [])
+        self.assertEqual(c.data.processes[0].mem_mb, 128.)
+
     def test_cpu_uses_tick_deltas_and_first_frame_is_unknown(self):
         c = collector()
         samples = iter([(100, 50, 800, 50), (120, 60, 860, 60)])

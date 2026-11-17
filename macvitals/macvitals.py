@@ -16,12 +16,13 @@ Usage:
 Keyboard shortcuts:
   q       Quit
   p       Pause/resume
-  1-6     Switch page (Overview/CPU/GPU/Memory/Processes/Sensors)
-  c/m     Sort processes by CPU/memory
+  1-7     Switch page (Overview/CPU/GPU/Memory/Apps/Sensors/Docker)
+  c/m     Sort processes or containers by CPU/memory
+  v       Toggle applications/processes or containers/projects on their pages
   ← →     Previous/next page
 """
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 __author__ = "macvitals contributors"
 
 import argparse
@@ -42,6 +43,25 @@ import platform
 from collections import deque
 from dataclasses import dataclass, field, asdict
 from typing import Optional, Dict, List, Tuple
+
+try:
+    from .docker_monitor import DockerMonitor, DockerSnapshot, DockerError, DockerReadouts
+    from .docker_actions import DockerActions, ActionTarget, LABELS
+except ImportError:
+    try:  # Direct script: python3 macvitals/macvitals.py
+        from docker_monitor import DockerMonitor, DockerSnapshot, DockerError, DockerReadouts
+        from docker_actions import DockerActions, ActionTarget, LABELS
+    except ImportError:  # File-based developer/test imports from the repo root.
+        from macvitals.docker_monitor import DockerMonitor, DockerSnapshot, DockerError, DockerReadouts
+        from macvitals.docker_actions import DockerActions, ActionTarget, LABELS
+
+try:
+    from .process_monitor import ProcessMonitor, ProcessSnapshot, ProcessInfo, ProcessUnavailable
+except ImportError:
+    try:
+        from process_monitor import ProcessMonitor, ProcessSnapshot, ProcessInfo, ProcessUnavailable
+    except ImportError:
+        from macvitals.process_monitor import ProcessMonitor, ProcessSnapshot, ProcessInfo, ProcessUnavailable
 
 
 # ──────────────────────────── Apple SMC ────────────────────────────
@@ -410,17 +430,6 @@ class PowerStats:
 
 
 @dataclass
-class ProcessInfo:
-    pid: int = 0
-    name: str = ""
-    cpu_pct: float = 0.0
-    mem_pct: float = 0.0
-    mem_mb: float = 0.0
-    threads: int = 0
-    cpu_available: bool = False
-
-
-@dataclass
 class SystemInfo:
     """静态系统信息"""
     chip: str = ""
@@ -442,9 +451,11 @@ class MonitorData:
     mem: MemStats = field(default_factory=MemStats)
     disk: DiskStats = field(default_factory=DiskStats)
     net: NetStats = field(default_factory=NetStats)
+    docker: DockerSnapshot = field(default_factory=DockerSnapshot)
     thermal: ThermalStats = field(default_factory=ThermalStats)
     power: PowerStats = field(default_factory=PowerStats)
     processes: List[ProcessInfo] = field(default_factory=list)
+    process_sample: ProcessSnapshot = field(default_factory=ProcessSnapshot)
     sys_info: SystemInfo = field(default_factory=SystemInfo)
     has_sudo: bool = False
     uptime_s: float = 0.0
@@ -474,7 +485,8 @@ class MonitorData:
 # ──────────────────────────── 数据采集器 ────────────────────────────
 
 class DataCollector:
-    def __init__(self, interval: float = 1.0, developer_mode: bool = False):
+    def __init__(self, interval: float = 1.0, developer_mode: bool = False,
+                 docker_enabled: bool = True, docker_context: Optional[str] = None):
         self.data = MonitorData()
         self.data.refresh_interval = interval
         self.data.developer_mode = developer_mode
@@ -499,12 +511,18 @@ class DataCollector:
         self._prev_net_time = None
         self._prev_disk = None
         self._prev_disk_time = None
+        try:
+            self._process_reader = ProcessMonitor()
+        except ProcessUnavailable:
+            self._process_reader = None
         self._primary_interface = None
         self._interface_checked_at = 0.0
         self._running = True
         self._paused = False
         self._collect_lock = threading.RLock()
         self._snapshot_lock = threading.Lock()
+        self._docker = DockerMonitor(enabled=docker_enabled, context=docker_context)
+        self.data.docker = self._docker.snapshot()
         self._published = copy.deepcopy(self.data)
         self._stop_event = threading.Event()
         self._bg_thread = None
@@ -547,11 +565,25 @@ class DataCollector:
     def snapshot(self):
         """UI only reads complete, detached samples; collection never holds this lock for I/O."""
         with self._snapshot_lock:
-            return copy.deepcopy(self._published)
+            data = copy.deepcopy(self._published)
+        # Docker has its own slower I/O worker. Neither a stalled daemon nor
+        # CLI startup can hold up the host collector or the render thread.
+        if hasattr(self, "_docker"):
+            data.docker = self._docker.snapshot()
+            data.source_status["docker"] = data.docker.status
+            age = max(0.0, time.monotonic() - data.docker.sampled_at) if data.docker.sampled_at else None
+            data.source_meta["docker"] = {
+                "source": "Docker CLI (local engine)", "status": data.docker.status,
+                "meaning": "容器 CPU 100%=1 虚拟核；内存为 CLI 缓存扣减口径",
+                "comparison": "引擎/容器口径，不等同于当前 Mac 整机资源",
+                "age_s": round(age, 3) if age is not None else None,
+            }
+        return data
 
     def start(self):
         """启动后台采集"""
         self.start_powermetrics()
+        self._docker.start()
         self._bg_thread = threading.Thread(target=self._bg_collect_loop, daemon=True)
         self._bg_thread.start()
 
@@ -582,6 +614,8 @@ class DataCollector:
     def set_paused(self, paused: bool):
         """暂停或恢复后台采集。"""
         self._paused = paused
+        if hasattr(self, "_docker"):
+            self._docker.set_paused(paused)
 
     def start_powermetrics(self):
         """Probe supported samplers; privilege alone does not imply available data."""
@@ -757,6 +791,8 @@ class DataCollector:
     def stop_powermetrics(self):
         self._running = False
         self._stop_event.set()
+        if hasattr(self, "_docker"):
+            self._docker.stop()
         if self._pm_proc and self._pm_proc.poll() is None:
             self._pm_proc.terminate()
             try:
@@ -851,7 +887,10 @@ class DataCollector:
             "network": ("netstat + route", "接口累计字节差分", "是所选接口流量，不是应用净流量"),
             "thermal": thermal_definition,
             "sensors": ("AppleSMC + powermetrics", "已识别温度测点与风扇", "测点平均不等于最高结温；不同工具测点可能不同"),
-            "processes": ("ps cumulative CPU time + RSS", "进程窗口 CPU 与常驻内存", "RSS 不等于 footprint；CPU 是本程序采样窗口口径"),
+            "processes": (("libproc rusage + executable bundle" if self.data.process_sample.memory_kind == "footprint"
+                           else "ps cumulative CPU time + RSS"),
+                          "进程窗口 CPU；应用按可确认归属聚合",
+                          "footprint 不是整机已用 RAM；RSS 降级时不提供应用聚合"),
             "uptime": ("sysctl kern.boottime", "系统启动时间", "系统级时间，不依赖 Stats 或活动监视器"),
         }
         finished_at = time.monotonic()
@@ -1200,6 +1239,24 @@ class DataCollector:
         self.data.source_status['sensors'] = 'ok' if sensors or fans else 'unavailable'
 
     def _collect_processes(self):
+        reader = getattr(self, '_process_reader', None)
+        if reader is not None:
+            try:
+                sample = reader.collect(total_cores=self.data.sys_info.total_cores,
+                                        ram_gb=self.data.sys_info.ram_gb)
+                self.data.process_sample = sample
+                self.data.processes = sample.processes
+                self.data.source_status['processes'] = sample.status
+                # A later fallback must not bridge an old ps CPU baseline.
+                self._prev_process_times = {}
+                self._prev_process_time = None
+                return
+            except ProcessUnavailable:
+                pass
+        self._collect_processes_ps()
+
+    def _collect_processes_ps(self):
+        """Fallback only: never mix RSS into an application's footprint total."""
         try:
             out = subprocess.check_output(
                 ["ps", "-ww", "-Ao", "pid=,lstart=,time=,rss=,comm="],
@@ -1255,6 +1312,10 @@ class DataCollector:
             self._prev_process_time = None
             self.data.processes = []
             self.data.source_status['processes'] = 'unavailable'
+        self.data.process_sample = ProcessSnapshot(
+            status=self.data.source_status['processes'], processes=self.data.processes,
+            memory_kind='rss', enumerated_count=len(self.data.processes),
+            readable_count=len(self.data.processes))
 
     def _collect_uptime(self):
         try:
@@ -1332,15 +1393,32 @@ class MonitorUI:
     COLOR_CHART2 = 9
     COLOR_GPU = 10
     COLOR_TEMP = 11
-    PAGE_OVERVIEW, PAGE_CPU, PAGE_GPU, PAGE_MEMORY, PAGE_PROCESSES, PAGE_SENSORS = range(6)
-    PAGE_NAMES = ["总览", "CPU", "GPU", "内存", "进程", "传感器"]
+    PAGE_OVERVIEW, PAGE_CPU, PAGE_GPU, PAGE_MEMORY, PAGE_PROCESSES, PAGE_SENSORS, PAGE_DOCKER = range(7)
+    PAGE_NAMES = ["总览", "CPU", "GPU", "内存", "应用/进程", "传感器", "Docker"]
     PROCESS_DISPLAY_LIMIT = 15
 
-    def __init__(self, stdscr: curses.window, data: MonitorData):
+    def __init__(self, stdscr: curses.window, data: MonitorData, docker_actions=None):
         self.stdscr, self.data = stdscr, data
         self.page = 0
         self.paused = False
         self.process_sort = "cpu"
+        self.process_view = "apps"
+        self.app_selected_key = ""
+        self.app_expanded = False
+        self.docker_sort = "cpu"
+        self.docker_grouped = True
+        self.docker_view = "containers"
+        self.docker_project_selected = ""
+        self.docker_project_expanded = False
+        self.docker_detail_expanded = False
+        self.docker_help_expanded = False
+        self.docker_selected_id = ""
+        self.docker_actions = docker_actions
+        self.docker_readouts = DockerReadouts(context=getattr(docker_actions, "context", None)) if docker_actions is not None else None
+        self._docker_readout_notice = ""
+        self._docker_dialog = None
+        self._docker_dialog_fits = False
+        self._docker_notice = ""
         self.sensor_scroll = 0
         self._scroll = {}
         self._init_colors()
@@ -1418,21 +1496,103 @@ class MonitorUI:
             pass
 
     def handle_key(self, key):
+        if getattr(self, "_docker_dialog", None) is not None:
+            return self._handle_docker_dialog(key)
         if key in (ord("q"), ord("Q")):
             return False
         if not hasattr(self, "_scroll"):
             self._scroll = {}
         if key in (ord("p"), ord("P")):
             self.paused = not self.paused
-        if ord("1") <= key <= ord("6"):
+        if ord("1") <= key < ord("1") + len(self.PAGE_NAMES):
             self.page = key - ord("1")
         if key == curses.KEY_LEFT:
-            self.page = (self.page - 1) % 6
+            self.page = (self.page - 1) % len(self.PAGE_NAMES)
         if key == curses.KEY_RIGHT:
-            self.page = (self.page + 1) % 6
+            self.page = (self.page + 1) % len(self.PAGE_NAMES)
         if self.page == self.PAGE_PROCESSES and key in (ord("c"), ord("C"), ord("m"), ord("M")):
             self.process_sort = "memory" if chr(key).lower() == "m" else "cpu"
             self._scroll[self.page] = 0
+        if self.page == self.PAGE_PROCESSES:
+            if key in (ord("v"), ord("V")):
+                self.process_view = "processes" if self.process_view == "apps" else "apps"
+                self._scroll[self.page] = 0
+            if self.process_view == "apps":
+                if key in (ord("n"), ord("N"), ord("b"), ord("B")):
+                    apps = self._process_apps()
+                    if apps:
+                        selected = self._selected_app(apps)
+                        index = next(i for i, app in enumerate(apps) if app.key == selected.key)
+                        direction = 1 if chr(key).lower() == "n" else -1
+                        self.app_selected_key = apps[(index + direction) % len(apps)].key
+                        self._scroll[self.page] = 0
+                if key in (10, 13, curses.KEY_ENTER):
+                    if self._selected_app(self._process_apps()) is not None:
+                        self.app_expanded = not self.app_expanded
+                        self._scroll[self.page] = 0
+                if key == 27:
+                    self.app_expanded = False
+                    self._scroll[self.page] = 0
+        if self.page == self.PAGE_DOCKER:
+            if key in (ord("v"), ord("V")):
+                self.docker_view = "projects" if self.docker_view == "containers" else "containers"
+                self.docker_project_selected = ""
+                self.docker_project_expanded = False
+                self._docker_notice = ""
+                self._scroll[self.page] = 0
+            if self.docker_view == "projects" and key in (ord("n"), ord("N"), ord("b"), ord("B")):
+                projects = self._docker_projects()
+                if projects:
+                    names = [name for name, _ in projects]
+                    current = self.docker_project_selected if self.docker_project_selected in names else names[0]
+                    index = names.index(current)
+                    direction = 1 if chr(key).lower() == "n" else -1
+                    self.docker_project_selected = names[(index + direction) % len(names)]
+                    self.docker_project_expanded = True
+            if self.docker_view == "projects" and key in (10, 13, curses.KEY_ENTER):
+                projects = self._docker_projects()
+                if projects and not self.docker_project_selected:
+                    self.docker_project_selected = projects[0][0]
+                    self.docker_project_expanded = True
+                elif self.docker_project_selected:
+                    self.docker_project_expanded = not self.docker_project_expanded
+            if self.docker_view == "projects" and key == 27:
+                self.docker_project_selected = ""
+                self.docker_project_expanded = False
+            if key in (ord("o"), ord("O")):
+                if self.docker_view == "projects":
+                    self._docker_notice = "项目视图当前只读；操作仍需回到单容器视图逐个选择"
+                else:
+                    self._open_docker_actions()
+            if key in (ord("l"), ord("L"), ord("i"), ord("I")):
+                if self.docker_view == "projects":
+                    self._docker_notice = "请切回容器视图选择具体容器"
+                else:
+                    self._open_docker_readout("logs" if chr(key).lower() == "l" else "inspect")
+            if key in (ord("x"), ord("X")) and self.docker_readouts is not None:
+                self.docker_readouts.clear()
+            if key in (ord("d"), ord("D")) and self.docker_view == "containers":
+                self.docker_detail_expanded = not self.docker_detail_expanded
+                self._scroll[self.page] = 0
+            if key in (ord("h"), ord("H"), ord("?")):
+                self.docker_help_expanded = not self.docker_help_expanded
+                self._scroll[self.page] = 0
+            if self.docker_view == "containers" and key in (ord("c"), ord("C"), ord("m"), ord("M")):
+                self.docker_sort = "memory" if chr(key).lower() == "m" else "cpu"
+                self._scroll[self.page] = 0
+            if self.docker_view == "containers" and key in (ord("g"), ord("G")):
+                self.docker_grouped = not self.docker_grouped
+                self._scroll[self.page] = 0
+            if self.docker_view == "containers" and key in (ord("n"), ord("N"), ord("b"), ord("B")):
+                containers = self._docker_containers()
+                if containers:
+                    selected = self._docker_selected(containers)
+                    index = next(i for i, item in enumerate(containers) if item.id == selected.id)
+                    direction = 1 if chr(key).lower() == "n" else -1
+                    self.docker_selected_id = containers[(index + direction) % len(containers)].id
+                    # The detail panel follows the list; keep selection shortcuts useful
+                    # without taking away the existing j/k page scrolling controls.
+                    self._scroll[self.page] = 10 ** 9
         offset = self.sensor_scroll if self.page == self.PAGE_SENSORS else self._scroll.get(self.page, 0)
         step = max(1, self.stdscr.getmaxyx()[0] - 5)
         if key in (curses.KEY_DOWN, ord("j"), ord("J")):
@@ -1451,6 +1611,117 @@ class MonitorUI:
         if self.page == self.PAGE_SENSORS:
             self.sensor_scroll = max(0, offset)
         return True
+
+    def _open_docker_actions(self):
+        self._scroll[self.PAGE_DOCKER] = 0
+        if self.paused:
+            self._docker_notice = "请先恢复采样，再打开容器操作"
+            return
+        if self.docker_actions is None:
+            self._docker_notice = "操作入口尚未连接"
+            return
+        if self.docker_actions.snapshot().status == "running":
+            self._docker_notice = "已有操作正在执行，请勿重复提交"
+            return
+        selected = self._docker_selected(self._docker_containers())
+        if selected is None:
+            self._docker_notice = "请等待容器数据并选择一个容器"
+            return
+        try:
+            target = ActionTarget.capture(self.data.docker, selected)
+            if not target.allowed():
+                self._docker_notice = ("该容器会在停止时自动删除，首期不提供停止或重启" if target.auto_remove
+                                       else "当前容器状态不支持操作，请等待状态稳定")
+                return
+        except DockerError as exc:
+            self._docker_notice = exc.message
+            return
+        self._docker_notice = ""
+        self._docker_dialog = {"target": target, "action": None, "confirm": False}
+        self._docker_dialog_fits = False
+
+    def _open_docker_readout(self, kind):
+        if self.docker_readouts is None:
+            self._docker_readout_notice = "只读详情入口尚未连接"
+            return
+        selected = self._docker_selected(self._docker_containers())
+        if selected is None:
+            self._docker_readout_notice = "请先等待并选择一个容器"
+            return
+        if not self.docker_readouts.submit(kind, selected, self.data.docker):
+            self._docker_readout_notice = "已有 Docker 只读请求正在读取"
+        else:
+            self._docker_readout_notice = "已提交只读请求；结果不会保存"
+
+    def _handle_docker_dialog(self, key):
+        dialog = self._docker_dialog
+        if key in (27, ord("q"), ord("Q")):
+            self._docker_dialog = None
+            self._scroll[self.PAGE_DOCKER] = 0
+            return True
+        if (not self._docker_dialog_fits or
+                self.stdscr.getmaxyx() != getattr(self, "_docker_dialog_size", None)):
+            return True  # Never execute an unseen/truncated confirmation.
+        if dialog["action"] is None:
+            action = {ord("s"): "start", ord("t"): "stop", ord("r"): "restart",
+                      ord("p"): "pause", ord("u"): "unpause"}.get(key)
+            if action in dialog["target"].allowed():
+                dialog["action"] = action
+                dialog["confirm"] = False
+                self._docker_dialog_fits = False
+            return True
+        if key in (9, curses.KEY_LEFT, curses.KEY_RIGHT):
+            dialog["confirm"] = not dialog["confirm"]
+        if key in (10, 13, curses.KEY_ENTER):
+            if dialog["confirm"]:
+                if self.paused or getattr(self.data.docker, "status", "") != "ok":
+                    self._docker_notice = "采样暂停或连接已失效；未执行，请刷新后重新选择"
+                elif not self.docker_actions.submit(dialog["target"], dialog["action"]):
+                    self._docker_notice = "未提交：已有操作正在执行或目标状态不支持"
+            else:
+                self._docker_notice = "已取消，未执行容器操作"
+            self._docker_dialog = None
+            self._scroll[self.PAGE_DOCKER] = 0
+        return True
+
+    def _render_docker_dialog(self):
+        dialog = self._docker_dialog
+        target, action = dialog["target"], dialog["action"]
+        h, w = self.stdscr.getmaxyx()
+        self._docker_dialog_size = (h, w)
+        rows = ["容器操作 / " + (LABELS[action] + "确认" if action else "选择操作"),
+                "容器: " + target.name, "Compose: " + (target.project or "独立容器"),
+                "ID: " + target.id, "连接: " + target.context,
+                "只操作此容器，不操作整个 Compose 项目。"]
+        if action:
+            if action == "stop":
+                rows += ["将中断此容器服务；使用 Docker 配置的正常停止流程。",
+                         "宽限期结束后 Docker 可能强制终止进程。"]
+            elif action == "restart":
+                rows += ["将重启此容器；不会自动重启关联服务。"]
+            elif action == "pause":
+                rows += ["将冻结此容器内进程；网络连接可能暂时无响应。"]
+            elif action == "unpause":
+                rows += ["将恢复此容器内已冻结的进程。"]
+            else:
+                rows += ["启动此容器，不自动启动关联服务。"]
+            rows += ["超时不自动重试；退出程序不会撤销已提交的操作。",
+                     "命令完成不代表应用或健康检查已就绪。",
+                     "Tab / ←→ 切换，Enter 选择；Esc 取消",
+                     ("取消    [确认执行]" if dialog["confirm"] else "[取消]    确认执行")]
+        else:
+            rows += [" | ".join({"start": "s 启动", "stop": "t 停止", "restart": "r 重启",
+                                  "pause": "p 暂停", "unpause": "u 恢复"}[a]
+                                for a in target.allowed()), "Esc / q 取消"]
+        wrapped = [line for row in rows for line in self._wrap(row, max(1, w - 2))]
+        self._docker_dialog_fits = w >= 24 and len(wrapped) <= h - 1
+        if not self._docker_dialog_fits:
+            self._set(0, 0, "请放大终端以完整查看操作确认", self.COLOR_WARNING)
+            self._set(min(1, h - 1), 0, "操作已锁定；Esc / q 取消", self.COLOR_DIM)
+        else:
+            for index, row in enumerate(wrapped):
+                self._set(index, 1, row, self.COLOR_WARNING if action else self.COLOR_ACCENT, index == 0)
+        self.stdscr.refresh()
 
     def _ok(self, source):
         return getattr(self.data, "source_status", {}).get(source) == "ok"
@@ -1473,6 +1744,7 @@ class MonitorUI:
             self.PAGE_MEMORY: ("memory", "memory_pressure", "swap"),
             self.PAGE_PROCESSES: ("processes",),
             self.PAGE_SENSORS: ("sensors", "thermal"),
+            self.PAGE_DOCKER: ("docker",),
         }.get(self.page, ())
         parts = []
         for key in keys:
@@ -1562,6 +1834,332 @@ class MonitorUI:
             "可用空间: " + self._value("disk_capacity", d.disk.root_avail_gb, " GiB"),
         ]
 
+    @staticmethod
+    def _docker_bytes(value):
+        if value is None:
+            return "--"
+        for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+            if abs(value) < 1024 or unit == "TiB":
+                return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+            value /= 1024
+
+    def _docker_metric(self, container, field):
+        snapshot = getattr(self.data, "docker", None)
+        if snapshot is None or snapshot.status != "ok" or container.state not in ("running", "paused"):
+            return None
+        return getattr(container, field, None)
+
+    @staticmethod
+    def _docker_started(container):
+        from datetime import datetime, timezone
+        try:
+            # Docker timestamps carry nanoseconds; Python 3.9 accepts only
+            # microseconds here. Preserve the timezone while trimming precision.
+            timestamp = re.sub(r"(\.\d{6})\d+", r"\1", container.started_at)
+            started = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            if started.year < 1970 or started.tzinfo is None:
+                return "--"
+            label = started.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+            if container.state == "running":
+                seconds = max(0, int((datetime.now(timezone.utc) - started).total_seconds()))
+                label += f"（已运行 {seconds // 86400}天 {seconds % 86400 // 3600}时 {seconds % 3600 // 60}分）"
+            return label
+        except (ValueError, TypeError, AttributeError, OverflowError):
+            return "--"
+
+    def _docker_state(self, container):
+        snapshot = getattr(self.data, "docker", None)
+        if snapshot is None or snapshot.status != "ok":
+            return "状态待更新"
+        state = {"running": "运行中", "paused": "已暂停", "exited": "已停止",
+                 "dead": "已终止", "created": "未启动", "restarting": "重启中",
+                 "removing": "移除中"}.get(container.state, "未知状态")
+        if container.state == "running":
+            health = {"healthy": "健康", "unhealthy": "健康检查失败", "starting": "健康检查中"}.get(
+                container.health)
+            if health:
+                state += " · " + health
+        return state
+
+    def _docker_containers(self):
+        snapshot = getattr(self.data, "docker", None)
+        containers = list(getattr(snapshot, "containers", []))
+        field = "memory_bytes" if self.docker_sort == "memory" else "cpu_pct"
+
+        def order(container):
+            value = self._docker_metric(container, field)
+            return (value is None, -(value or 0), container.name.casefold(), container.id)
+
+        containers.sort(key=order)
+        if self.docker_grouped:
+            # Stable sorting preserves resource order inside each Compose project.
+            containers.sort(key=lambda item: (not bool(item.project), (item.project or "").casefold()))
+        return containers
+
+    def _docker_selected(self, containers):
+        if not containers:
+            self.docker_selected_id = ""
+            return None
+        selected = next((item for item in containers if item.id == self.docker_selected_id), containers[0])
+        self.docker_selected_id = selected.id
+        return selected
+
+    def _docker_summary(self):
+        snapshot = getattr(self.data, "docker", None)
+        if snapshot is None or snapshot.status not in ("ok", "stale"):
+            return None
+        if snapshot.status == "stale":
+            return ["连接中断，等待重新采样", "7 Docker 查看连接状态"]
+        containers = snapshot.containers
+        running = sum(item.state == "running" for item in containers)
+        paused = sum(item.state == "paused" for item in containers)
+        stopped = sum(item.state in ("exited", "dead", "created") for item in containers)
+        failures = sum(item.state == "running" and item.health == "unhealthy" for item in containers)
+        return [f"{snapshot.engine or 'Docker'} | {len(containers)} 个容器",
+                f"运行 {running}  暂停 {paused}  停止/未启动 {stopped}",
+                f"运行中健康检查失败 {failures} | 7 查看详情"]
+
+    def _docker_command_reference(self):
+        """Compact, non-executing command guide based on the user's cheat sheet.
+
+        MacVitals intentionally does not run project-wide or destructive commands
+        from a dashboard. This keeps the SSH tool useful as a reference without
+        turning a monitoring view into an accidental deployment console.
+        """
+        return [
+            ("常用 Docker 命令 / 仅供复制", self.COLOR_DIM, [
+                "只读: docker ps -a  |  docker images  |  docker stats --no-stream",
+                "空间: docker system df -v  |  引擎: docker info",
+                "Compose 检查: docker compose ps  |  docker compose config --services",
+                "Compose 更新/启停请在项目目录执行；MacVitals 不会运行这些命令。",
+                "down、prune、rm、rmi、volume prune 和 exec 可能中断服务或删除数据。",
+            ])
+        ]
+
+    def _docker_projects(self):
+        projects = {}
+        for container in getattr(getattr(self.data, "docker", None), "containers", []):
+            if container.project:
+                projects.setdefault(container.project, []).append(container)
+        return sorted(projects.items(), key=lambda row: row[0].casefold())
+
+    def _docker_project_blocks(self):
+        projects = self._docker_projects()
+        if not projects:
+            return [("Compose 项目", self.COLOR_HEADER, [
+                "没有发现带 Compose 项目标记的现有容器。",
+                "没有容器的服务无法从 Docker 容器标签中发现。",
+                "项目视图只读，不会扫描磁盘或执行 Compose 配置。",
+            ])]
+        names = [name for name, _ in projects]
+        if self.docker_project_selected not in names:
+            self.docker_project_selected = names[0]
+        rows = []
+        for name, members in projects:
+            service_count = len({item.service for item in members if item.service})
+            running = sum(item.state == "running" for item in members)
+            stopped = sum(item.state in ("exited", "created") for item in members)
+            other = len(members) - running - stopped
+            rows.append(f"{'>' if name == self.docker_project_selected else ' '} {name} | 服务 {service_count} | 容器 {len(members)} | 运行 {running} / 停止 {stopped} / 其他 {other}")
+        blocks = [("Compose 项目 / 只读", self.COLOR_HEADER,
+                   ["v 返回容器 | n/b 选择项目 | Enter 展开/收起 | Esc 清除选择"] + rows)]
+        if self.docker_project_selected and self.docker_project_expanded:
+            chosen = dict(projects).get(self.docker_project_selected, [])
+            services = {}
+            for item in chosen:
+                services.setdefault(item.service or "未标记服务", []).append(item)
+            for service, members in sorted(services.items(), key=lambda row: row[0].casefold()):
+                running = [item for item in members if item.state == "running"]
+                cpu_values = [item.cpu_pct for item in running if item.cpu_pct is not None]
+                mem_values = [item.memory_bytes for item in running if item.memory_bytes is not None]
+                cpu = f"{sum(cpu_values):.1f}%" if cpu_values else "--"
+                memory = self._docker_bytes(sum(mem_values)) if mem_values else "--"
+                incomplete = len(cpu_values) != len(running) or len(mem_values) != len(running)
+                note = "（读数不完整）" if incomplete else ""
+                rows = [f"{item.name} | {self._docker_state(item)} | {item.health or '无健康检查'}"
+                        for item in members]
+                blocks.append((f"服务 / {service} / {len(members)} 个已有容器", self.COLOR_GOOD,
+                               [f"CPU 合计 {cpu} | 内存合计 {memory}{note}"] + rows))
+        return blocks
+
+    def _docker_blocks(self):
+        snapshot = getattr(self.data, "docker", None)
+        if snapshot is None:
+            return [("Docker", self.COLOR_CHART, ["等待 Docker 采集器", "Docker 是可选功能，现有硬件监测不受影响。"])]
+        if snapshot.status not in ("ok", "stale"):
+            return [("Docker / 连接状态", self.COLOR_CHART,
+                     [snapshot.message or "等待 Docker 连接", "Docker 是可选功能，现有硬件监测不受影响。"])]
+        if self.docker_view == "projects":
+            blocks = [("Docker / 引擎", self.COLOR_CHART,
+                       [f"{snapshot.engine or 'Docker'} | {snapshot.context or '--'} | 项目只读"])] + self._docker_project_blocks()
+            if self._docker_notice:
+                blocks.insert(1, ("提示", self.COLOR_WARNING, [self._docker_notice]))
+            return blocks
+        valid = snapshot.status == "ok"
+        cpus = str(snapshot.engine_cpus) if valid and snapshot.engine_cpus is not None else "--"
+        memory = self._docker_bytes(snapshot.engine_memory_bytes if valid else None)
+        status = "观察中 · 操作需确认" if valid else "连接中断；旧读数已失效"
+        connection = [f"{snapshot.engine or 'Docker'} · {snapshot.context or '--'} · {status}",
+                      f"{len(snapshot.containers)} 个容器 | {cpus} 虚拟 CPU / {memory} 引擎内存",
+                      "Docker CPU 100% ≈ 1 个虚拟核；内存为引擎口径，不是 Mac 整机容量。"]
+        blocks = [("Docker / 引擎", self.COLOR_CHART, connection)]
+        if self._docker_notice:
+            blocks.append(("操作提示", self.COLOR_WARNING, [self._docker_notice]))
+        if self._docker_readout_notice:
+            blocks.append(("只读请求", self.COLOR_DIM, [self._docker_readout_notice]))
+        if self.docker_readouts is not None:
+            readout = self.docker_readouts.snapshot()
+            if readout["status"] != "idle":
+                blocks.append(("临时 " + ("日志" if readout["kind"] == "logs" else "安全 inspect"),
+                               self.COLOR_DIM, ["目标: " + readout.get("target", "--") +
+                                                " | context: " + readout.get("context", "--") + " | x 清除"] +
+                               self._wrap(readout["text"], 100)[:120]))
+        result = self.docker_actions.snapshot() if self.docker_actions is not None else None
+        if result is not None and result.status != "idle":
+            blocks.append(("容器操作 / " + LABELS.get(result.action, ""), self.COLOR_WARNING,
+                           ["目标: " + result.target_name, result.message,
+                            "退出不会撤销已提交操作；不会自动重试。"] ))
+        containers = self._docker_containers()
+        selected = self._docker_selected(containers)
+        sort_name = "内存" if self.docker_sort == "memory" else "CPU"
+        mode = "Compose 分组" if self.docker_grouped else "全部容器排名"
+        blocks.append((f"容器 / {mode} / {sort_name}降序", self.COLOR_HEADER,
+                       ["v 项目 | n/b 选容器 | c/m 排序 | o 操作 | d 详情 | l 日志 | i inspect | h 帮助",
+                       "序号  容器名称 | 状态 | CPU | 内存用量 / 引擎或容器上限"] +
+                       (["当前没有容器"] if valid and not containers else [])))
+        groups = []
+        for index, container in enumerate(containers, 1):
+            group = container.project or "独立容器"
+            if not self.docker_grouped:
+                group = "全部容器"
+            if not groups or groups[-1][0] != group:
+                groups.append((group, []))
+            cpu = self._docker_metric(container, "cpu_pct")
+            cpu_text = "--" if cpu is None else f"{cpu:.1f}%"
+            memory = self._docker_bytes(self._docker_metric(container, "memory_bytes"))
+            limit = self._docker_bytes(self._docker_metric(container, "memory_limit_bytes"))
+            marker = ">" if container.id == selected.id else " "
+            groups[-1][1].append(f"{marker}{index:2d} {container.name} | {self._docker_state(container)} | {cpu_text} | {memory} / {limit}")
+        blocks.extend((group, self.COLOR_GOOD, rows) for group, rows in groups)
+        if selected and self.docker_detail_expanded:
+            position = next(i for i, item in enumerate(containers, 1) if item.id == selected.id)
+            health = "--"
+            if valid and selected.state == "running":
+                health = {"healthy": "健康", "unhealthy": "检查失败", "starting": "检查中"}.get(
+                    selected.health, "未配置健康检查" if not selected.health else "未知状态")
+            restart = str(selected.restart_count) if valid and selected.restart_count is not None else "--"
+            pids = self._docker_metric(selected, "pids")
+            blocks.append((f"容器详情 / {position}/{len(containers)} / {selected.name}", self.COLOR_ACCENT, [
+                "状态: " + self._docker_state(selected) + " | 健康检查: " + health,
+                f"Compose: {selected.project or '--'} / 服务: {selected.service or '--'}",
+                "镜像: " + (selected.image or "--"),
+                "端口映射: " + (selected.ports or "无映射"),
+                "最近启动: " + (self._docker_started(selected) if valid else "--"),
+                "重启次数: " + restart + " | 进程/线程数: " + (str(pids) if pids is not None else "--"),
+                "网络累计 接收 / 发送: " + self._docker_bytes(self._docker_metric(selected, "network_rx_bytes")) +
+                " / " + self._docker_bytes(self._docker_metric(selected, "network_tx_bytes")),
+                "块设备累计 读 / 写: " + self._docker_bytes(self._docker_metric(selected, "block_read_bytes")) +
+                " / " + self._docker_bytes(self._docker_metric(selected, "block_write_bytes")),
+                "累计 I/O 不是每秒速率；PIDs 可能包含线程。",
+                "操作面板: s 启动 / t 停止 / r 重启 / p 暂停 / u 恢复（均需确认）。",
+            ]))
+        if self.docker_help_expanded:
+            blocks.extend(self._docker_command_reference())
+        return blocks
+
+    def _process_order(self, items):
+        by_memory = self.process_sort == "memory"
+        def rank(item):
+            available = item.mem_available if by_memory else item.cpu_available
+            value = item.mem_mb if by_memory else item.cpu_pct
+            return (not available, -value if available else 0, item.name.casefold(),
+                    str(getattr(item, "key", getattr(item, "pid", ""))))
+        return sorted(items, key=rank)
+
+    def _process_apps(self):
+        if self.data.source_status.get("processes") not in ("ok", "warming", "partial"):
+            return []
+        return self._process_order(self.data.process_sample.apps)[:self.PROCESS_DISPLAY_LIMIT]
+
+    def _selected_app(self, apps):
+        if not apps:
+            self.app_selected_key = ""
+            return None
+        selected = next((app for app in apps if app.key == self.app_selected_key), apps[0])
+        self.app_selected_key = selected.key
+        return selected
+
+    @staticmethod
+    def _app_metric(app, memory=False):
+        available = app.mem_available if memory else app.cpu_available
+        complete = app.mem_complete if memory else app.cpu_complete
+        if not available:
+            return "--"
+        value = app.mem_mb if memory else app.cpu_pct
+        return ("" if complete else "≥") + f"{value:.1f}" + (" MiB" if memory else "%")
+
+    def _process_rows(self, processes):
+        rows = []
+        for process in self._process_order(processes)[:self.PROCESS_DISPLAY_LIMIT]:
+            cpu = f"{process.cpu_pct:.1f}%" if process.cpu_available else "--"
+            memory = f"{process.mem_mb:.1f}" if process.mem_available else "--"
+            pct = f"{process.mem_pct:.1f}%" if process.mem_available and self.data.sys_info.ram_gb > 0 else "--"
+            rows.append(f"{process.pid:7d} {cpu:>7} {pct:>7} {memory:>9}  {process.name}")
+        return rows
+
+    def _process_coverage(self):
+        sample = self.data.process_sample
+        if sample.memory_kind == "rss":
+            return ""
+        missing = sample.enumerated_count - sample.readable_count
+        if missing > 0:
+            return "部分进程本轮未读取"
+        return ""
+
+    def _process_blocks(self):
+        sample = self.data.process_sample
+        order = "内存" if self.process_sort == "memory" else "CPU"
+        if self.process_view == "processes":
+            kind = "内存" if sample.memory_kind == "footprint" else "RSS"
+            rows = [f"    PID    CPU%    MEM%  {kind}(MiB)  进程"]
+            if self.data.source_status.get("processes") in ("ok", "warming", "partial"):
+                rows += self._process_rows(self.data.processes)
+            else:
+                rows += ["等待进程数据"]
+            coverage = self._process_coverage()
+            if coverage:
+                rows.append(coverage)
+            return [(f"进程 | {order}降序 · 前 15", self.COLOR_HEADER, rows)]
+
+        apps = self._process_apps()
+        selected = self._selected_app(apps)
+        rows = [" CPU%（整机）   内存（MiB）  进程数  应用"]
+        for app in apps:
+            mark = "▶" if selected is not None and app.key == selected.key else " "
+            rows.append(f"{mark} {self._app_metric(app):>9} {self._app_metric(app, True):>13}"
+                        f" {len(app.processes):6d}  {app.name}")
+        if not apps:
+            if sample.memory_kind == "rss":
+                rows.append("应用聚合暂不可用，按 v 查看 RSS 进程列表。")
+            elif self.data.source_status.get("processes") not in ("ok", "warming", "partial"):
+                rows.append("等待有效应用样本")
+            else:
+                rows.append("未识别到应用；按 v 查看系统服务与独立进程。")
+        blocks = [(f"应用 | {order}降序 · 前 15", self.COLOR_CHART, rows)]
+        if self.app_expanded and selected is not None:
+            members = [f"位置: {selected.path}",
+                       f"成员（{order}降序，前 {min(15, len(selected.processes))}/{len(selected.processes)}）",
+                       "    PID    CPU%    MEM%  内存(MiB)  进程"]
+            members += self._process_rows(selected.processes)
+            blocks.append(("应用详情 / " + selected.name, self.COLOR_GOOD, members))
+        if any((app.cpu_available and not app.cpu_complete) or
+               (app.mem_available and not app.mem_complete) for app in apps):
+            rows.append("≥ 为当前可读成员的合计")
+        coverage = self._process_coverage()
+        if coverage:
+            rows.append(coverage)
+        return blocks
+
     def _lines(self):
         d = self.data
         if self.page == self.PAGE_CPU:
@@ -1570,23 +2168,10 @@ class MonitorUI:
             return self._gpu_lines()
         if self.page == self.PAGE_MEMORY:
             return self._memory_lines() + [""] + self._disk_lines()
+        if self.page == self.PAGE_DOCKER:
+            return [line for title, _, lines in self._docker_blocks() for line in [title] + lines]
         if self.page == self.PAGE_PROCESSES:
-            by_memory = self.process_sort == "memory"
-            rows = [
-                "进程 | " + ("内存" if by_memory else "CPU") + "降序 | c:CPU  m:内存",
-                "CPU% = 逻辑 CPU 时间占比，整机 100%；不代表异构核心算力。",
-                "RSS 为常驻内存，含共享页，不可直接相加；不同于 App 内存。",
-                "    PID    CPU%    MEM%  RSS(MiB)  进程",
-            ]
-            if not self._ok("processes"):
-                return rows + ["等待有效进程样本 (-- 表示不可用)"]
-            processes = sorted(d.processes, key=(lambda p: p.mem_mb) if by_memory else
-                               (lambda p: p.cpu_pct if getattr(p, "cpu_available", False) else -1), reverse=True)
-            processes = processes[:self.PROCESS_DISPLAY_LIMIT]
-            for process in processes:
-                cpu = f"{process.cpu_pct:6.1f}%" if getattr(process, "cpu_available", False) else "     --"
-                rows.append(f"{process.pid:7d} {cpu} {process.mem_pct:6.1f}% {process.mem_mb:9.1f}  {process.name}")
-            return rows
+            return [line for title, _, rows in self._process_blocks() for line in [title] + rows]
         if self.page == self.PAGE_SENSORS:
             lines = [
                 "传感器",
@@ -1639,7 +2224,7 @@ class MonitorUI:
         if self.page == self.PAGE_OVERVIEW:
             power = (f"{d.cpu.power_w + d.gpu.power_w + d.ane.power_w:.2f} W"
                      if {"cpu_power", "gpu_power", "ane_power"} <= pm else "--")
-            return [
+            blocks = [
                 ("CPU", self.COLOR_CHART, [
                     self._meter(cpu_pct, self._ok("cpu")),
                     "温度(测点平均) " + self._temperature(d.cpu.temp_c),
@@ -1679,6 +2264,10 @@ class MonitorUI:
                     "开机时间: " + (f"{int(d.uptime_s // 86400)}天 {int(d.uptime_s % 86400 // 3600)}时" if self._ok("uptime") else "--"),
                 ]),
             ]
+            docker_summary = self._docker_summary()
+            if docker_summary is not None:
+                blocks.append(("Docker", self.COLOR_CHART, docker_summary))
+            return blocks
         if self.page == self.PAGE_CPU:
             lines = self._cpu_lines()
             return [("CPU / 实时负载", self.COLOR_CHART,
@@ -1699,8 +2288,9 @@ class MonitorUI:
                     ("启动磁盘 / 共享空间", self.COLOR_CHART, self._disk_lines()[1:]),
                     ("指标说明", self.COLOR_DIM, [lines[0], lines[-1]])]
         if self.page == self.PAGE_PROCESSES:
-            lines = self._lines()
-            return [(lines[0], self.COLOR_HEADER, lines[1:])]
+            return self._process_blocks()
+        if self.page == self.PAGE_DOCKER:
+            return self._docker_blocks()
         groups = [
             ("CPU 温度测点", self.COLOR_CHART, [(n, v) for n, v in d.thermal.sensors if n.startswith("CPU ")]),
             ("GPU 温度测点", self.COLOR_GPU, [(n, v) for n, v in d.thermal.sensors if n.startswith("GPU ")]),
@@ -1728,14 +2318,14 @@ class MonitorUI:
                 tone = self.COLOR_TEMP
             if "--" in line or "说明" in title or "等待" in line:
                 tone = self.COLOR_DIM
-            if "Warning" in line or "Critical" in line or "Heavy" in line:
+            if any(marker in line for marker in ("Warning", "Critical", "Heavy", "健康检查失败", "健康检查: 检查失败")):
                 tone, bold = self.COLOR_WARNING, True
             rows.extend((part, tone, bold) for part in self._wrap(line, width))
         return rows
 
     def _layout(self, width):
         """Compose virtual rows; scroll once after arranging whole panels."""
-        columns = 2 if width >= 88 and self.page != self.PAGE_PROCESSES else 1
+        columns = 2 if width >= 88 and self.page not in (self.PAGE_PROCESSES, self.PAGE_DOCKER) else 1
         panel_width = (width - 5) // 2 if columns == 2 else width - 2
         blocks = self._blocks()
         rows = []
@@ -1756,6 +2346,9 @@ class MonitorUI:
         try:
             self.stdscr.erase()
             h, w = self.stdscr.getmaxyx()
+            if getattr(self, "_docker_dialog", None) is not None:
+                self._render_docker_dialog()
+                return
             if h < 5 or w < 24:
                 self._set(0, 0, "终端过小", self.COLOR_WARNING)
                 if h > 2:
@@ -1783,8 +2376,17 @@ class MonitorUI:
             for row, spans in enumerate(lines[offset:offset + capacity], top_rows - 2):
                 for x, text, color, bold in spans:
                     self._set(row, x, text, color, bold)
-            self._set(h - 2, 0, f"{offset + 1}-{min(offset + capacity, len(lines))}/{len(lines)} | ↑↓/j k 滚动 | 1总览 2CPU 3GPU 4内存 5进程 6传感器", self.COLOR_DIM)
-            self._set(h - 1, 0, "q退出 p暂停 ←→切页 | PgUp/PgDn翻页" + (" | c CPU / m 内存" if self.page == 4 else ""), self.COLOR_DIM)
+            self._set(h - 2, 0, f"{offset + 1}-{min(offset + capacity, len(lines))}/{len(lines)} | ↑↓/j k 滚动 | 1总览 2CPU 3GPU 4内存 5应用/进程 6传感器 7Docker", self.COLOR_DIM)
+            help_text = "q退出 p暂停 ←→切页 | PgUp/PgDn翻页"
+            if self.page == self.PAGE_PROCESSES:
+                if self.process_view == "apps":
+                    help_text = "v进程  c/m排序  n/b选择  Enter展开  Esc收起  p暂停  q退出"
+                else:
+                    help_text = "v应用  c/m排序  p暂停  q退出"
+            elif self.page == self.PAGE_DOCKER:
+                help_text += " | c CPU / m 内存"
+                help_text += " | g分组 n/b详情 o操作"
+            self._set(h - 1, 0, help_text, self.COLOR_DIM)
             self.stdscr.refresh()
         except curses.error:
             pass
@@ -1819,9 +2421,18 @@ def parse_args(argv=None):
                         help="Run a root-only powermetrics/IOReport comparison and print JSON")
     parser.add_argument("--dev", action="store_true",
                         help="Development UI: show live data sources and freshness (no history is stored)")
+    docker_options = parser.add_mutually_exclusive_group()
+    docker_options.add_argument("--no-docker", action="store_true",
+                                help="Disable optional Docker monitoring")
+    docker_options.add_argument("--docker-context", metavar="NAME",
+                                help="Observe a named local Docker context (Unix socket only)")
     args = parser.parse_args(argv)
     if not math.isfinite(args.interval) or not 0.5 <= args.interval <= 10:
         parser.error("--interval must be finite and between 0.5 and 10 seconds")
+    if args.docker_context is not None and (
+            not args.docker_context.strip() or args.docker_context.startswith("-") or
+            len(args.docker_context) > 256 or not args.docker_context.isprintable()):
+        parser.error("--docker-context must be a valid nonempty context name")
     return args
 
 
@@ -1841,10 +2452,13 @@ def run_curses(stdscr: curses.window):
     stdscr.timeout(100)  # 100ms 检查一次按键
 
     # 初始化数据采集器（后台线程采集，不阻塞 UI）
-    collector = DataCollector(interval=interval, developer_mode=getattr(_args, "dev", False))
+    collector = DataCollector(interval=interval, developer_mode=getattr(_args, "dev", False),
+                              docker_enabled=not getattr(_args, "no_docker", False),
+                              docker_context=getattr(_args, "docker_context", None))
+    actions = DockerActions(context=getattr(_args, "docker_context", None))
     try:
         collector.start()
-        ui = MonitorUI(stdscr, collector.snapshot())
+        ui = MonitorUI(stdscr, collector.snapshot(), docker_actions=actions)
         last_render = 0
         while True:
             # 处理按键
@@ -1861,21 +2475,27 @@ def run_curses(stdscr: curses.window):
 
             # 渲染（按用户设定间隔，不阻塞）
             now = time.monotonic()
-            if not ui.paused and now - last_render >= interval:
-                ui.data = collector.snapshot()
+            if now - last_render >= interval:
+                if not ui.paused:
+                    ui.data = collector.snapshot()
                 ui.render()
                 last_render = now
 
     except KeyboardInterrupt:
         pass
     finally:
+        if ui.docker_readouts is not None:
+            ui.docker_readouts.stop()
+        actions.stop()
         collector.stop_powermetrics()
 
 
-def diagnose(interval, developer_mode=False):
-    collector = DataCollector(interval, developer_mode=developer_mode)
+def diagnose(interval, developer_mode=False, docker_enabled=True, docker_context=None):
+    collector = DataCollector(interval, developer_mode=developer_mode,
+                              docker_enabled=docker_enabled, docker_context=docker_context)
     try:
         collector.start_powermetrics()
+        collector._docker.start()
         collector.collect_all()
         # Startup overhead plus two headers can exceed 2.2 intervals. Wait for
         # an actual complete frame, with a deadline for unsupported/broken tools.
@@ -1887,6 +2507,9 @@ def diagnose(interval, developer_mode=False):
                     break
                 time.sleep(0.05)
         collector.collect_all()
+        deadline = time.monotonic() + 5.0
+        while collector._docker.snapshot().status == "checking" and time.monotonic() < deadline:
+            time.sleep(0.05)
         data = collector.snapshot()
         report = {
             "version": __version__, "platform": platform.platform(),
@@ -1898,10 +2521,35 @@ def diagnose(interval, developer_mode=False):
             "memory": asdict(data.mem), "disk": asdict(data.disk),
             "network": asdict(data.net), "thermal": asdict(data.thermal),
             "process_count": len(data.processes),
+            "process_sampling": {
+                "status": data.process_sample.status,
+                "memory_kind": data.process_sample.memory_kind,
+                "enumerated_count": data.process_sample.enumerated_count,
+                "readable_count": data.process_sample.readable_count,
+                "denied_count": data.process_sample.denied_count,
+                "exited_count": data.process_sample.exited_count,
+                "error_count": data.process_sample.error_count,
+                "path_unavailable_count": data.process_sample.path_unavailable_count,
+                "app_count": len(data.process_sample.apps),
+                "responsibility_available": data.process_sample.responsibility_available,
+                "responsibility_attributed_count": sum(
+                    p.app_attribution == "responsibility" for p in data.processes),
+                "collection_seconds": data.process_sample.collection_seconds,
+            },
             "sampled_at": data.sampled_at, "collection_seconds": data.collection_seconds,
             "developer_mode": data.developer_mode,
+            "docker": {
+                "status": data.docker.status, "message": data.docker.message,
+                "engine": data.docker.engine,
+                "engine_cpus": data.docker.engine_cpus,
+                "engine_memory_bytes": data.docker.engine_memory_bytes,
+                "container_count": len(data.docker.containers) if data.docker.status == "ok" else None,
+                "running_count": sum(c.state == "running" for c in data.docker.containers)
+                                 if data.docker.status == "ok" else None,
+                "collection_seconds": data.docker.collection_seconds,
+            },
             "notes": ["Unavailable measurements are null; source_status describes each collector.",
-                      "Process names/command lines are omitted from this diagnostic report."],
+                      "Process/container names, images, ports and command lines are omitted from this diagnostic report."],
         }
         # Diagnostic consumers must not mistake unavailable measurements for zeros.
         for domain, keys, source in (
@@ -1957,7 +2605,8 @@ def entry_point():
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, terminate)
     if _args.diagnose:
-        diagnose(_args.interval, developer_mode=_args.dev)
+        diagnose(_args.interval, developer_mode=_args.dev,
+                 docker_enabled=not _args.no_docker, docker_context=_args.docker_context)
         return
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise SystemExit("请在交互终端运行；SSH 请使用 ssh -t。无终端诊断请加 --diagnose。")

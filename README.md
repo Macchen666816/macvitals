@@ -4,29 +4,28 @@
 
 > SSH-first live system monitor for Apple Silicon Macs.
 
-面向 Apple Silicon Mac 的终端性能监视器。通过本机终端或 SSH，查看 CPU、GPU、内存、进程、硬件温度与风扇转速。
+面向 Apple Silicon Mac 的轻量终端监视器。在本机或 SSH 会话中，一起查看硬件状态、应用资源占用和 Docker 容器。
 
-## 定位：为 SSH 远程观察而做
+**当前版本：1.5.0 · Python 3.9+ · 无第三方 Python 运行依赖**
 
-MacVitals 不是 Stats、Activity Monitor 或其他桌面 GUI 监视器的替代品，也不试图和它们争夺同一个使用场景。Stats 等工具更适合本机菜单栏、图形界面、常驻运行和历史趋势；MacVitals 的目标是另一件事：人在外面通过 SSH 连接家里的 Mac 时，用一个轻量、即时、可审计的终端界面快速判断机器现在的状态。
+## 为 SSH 远程观察而做
 
-它坚持以下边界：
+MacVitals 与 Stats、Activity Monitor 等 GUI 工具服务于不同场景。Stats 适合本机菜单栏观察；MacVitals 适合人在外面，通过 SSH 连接家里的 Mac，随手打开就能看清机器和服务现在的状态。
 
-- 不依赖桌面环境，不经过第三方服务器，适合 SSH 和临时运行。
-- 不保存历史记录、日志数据库、云端数据或后台同步；退出即结束本次观察。
-- 保留彩色分块和清晰的页面层级，但不把无关的原始字段全部倾倒给用户。
-- 对每类数据区分有效、等待、陈旧和不可用，不用 `0` 掩盖采集失败。
-- 优先解释数据的来源和口径，而不是承诺和 Activity Monitor 或 Stats 的同名数字逐项相等。
+- 无需桌面环境，不经过第三方服务器。
+- 随用随开；不保存监控历史、运行日志或云端数据，退出即结束。
+- 彩色分块仪表盘，宽屏双栏、窄屏单栏，支持滚动。
+- CPU、GPU、内存、应用/进程、传感器和 Docker 分页展示，操作提示集中在底栏。
 
-如果你需要菜单栏图标、图形化设置、自动启动或历史曲线，Stats 一类 GUI 工具会更合适；如果你需要 SSH 下的即时诊断和轻量观察，MacVitals 才是它的目标场景。
+## 1.5.0 新功能
 
-使用 Python 标准库、curses 和 macOS 系统接口实现，无第三方 Python 运行依赖。系统能力和传感器布局因机型而异，不能保证所有 Apple Silicon 设备均提供相同指标。
-
-当前版本：1.4.0。需要 Python 3.9 或更新版本。
-
-界面沿用分块仪表盘设计：青色 CPU、紫色 GPU、绿色内存，配合使用率条、温度强调和趋势图。宽屏双栏、窄屏单栏，所有页面均可滚动。
+- **按 App 看资源占用：** 合并主进程、包内 Helper 和可识别的系统辅助进程，显示应用 CPU、内存与进程数；也可切回独立进程并展开应用成员。
+- **Docker 监控：** 在硬件指标旁查看容器状态、CPU、内存和 I/O，按 Compose 项目分组，或进入项目/服务只读视图。
+- **常用容器操作：** 启动、停止、重启、暂停、恢复；查看临时日志和精简 inspect，减少反复输入命令。
 
 ## 界面预览
+
+以下截图来自 1.4.0，展示硬件页面的配色与布局。
 
 ![MacVitals 总览](docs/assets/macvitals-overview.png)
 
@@ -51,105 +50,108 @@ MacVitals 不是 Stats、Activity Monitor 或其他桌面 GUI 监视器的替代
 
 </details>
 
-## 运行
+## 安装与运行
 
-在项目根目录执行：
+在要监测的 Mac 上克隆仓库：
 
 ```bash
-python3 macvitals/macvitals.py
-python3 macvitals/macvitals.py --interval 1
-python3 macvitals/macvitals.py --dev       # 开发版：显示当前来源与数据年龄
+git clone https://github.com/Macchen666816/macvitals.git
+cd macvitals
 python3 -m macvitals
 ```
 
-可选安装命令入口（建议在虚拟环境中安装）：
+使用 [uv](https://docs.astral.sh/uv/) 安装命令入口：
 
 ```bash
-python3 -m pip install .
+uv tool install --force --reinstall --from . macvitals
 macvitals
 ```
 
-包安装和开发安装需要 pip 21.3 或更新版本；旧版 macOS 开发者工具可能附带 pip 21.2，此时仍可直接运行 `python3 macvitals/macvitals.py`，或先更新打包工具。开发时可用 `python3 -m pip install -e .`。刷新间隔范围为 0.5–10 秒。
-
-CPU、内存、进程等基础指标通常无需管理员权限。温度与风扇由 AppleSMC 等接口读取，不依赖 powermetrics 的温度采样器；CPU/GPU 功率、频率等特权指标需要：
+更新时先退出旧程序，在仓库目录执行：
 
 ```bash
-sudo python3 macvitals/macvitals.py
+git pull --ff-only
+uv tool install --force --reinstall --from . macvitals
 ```
 
-通过 SSH 使用时，在被监测的 Mac 上运行上述命令。权限提升不能解决系统不支持某个采样器或未知传感器映射的问题。
+如果 shell 找不到命令，可运行 `uv tool update-shell` 后重新打开终端。也可以在虚拟环境中使用 `python3 -m pip install .` 安装。
 
-## 页面与快捷键
+CPU、内存、应用/进程等基础指标无需管理员权限。使用以下命令启用功率、频率等特权采样，并提高进程读取覆盖：
+
+```bash
+sudo "$(command -v macvitals)"
+```
+
+源码运行也支持 `sudo python3 -m macvitals`。通过 SSH 使用时，在被监测的 Mac 上运行。复制源码时请携带整个 `macvitals/` 目录。
+
+常用参数：
+
+```bash
+macvitals --interval 1          # 刷新间隔 0.5–10 秒
+macvitals --no-docker           # 关闭 Docker 采集
+macvitals --docker-context NAME # 选择本地 Docker context
+macvitals --dev                 # 显示当前来源、采样状态与数据年龄
+```
+
+## 页面与操作
 
 | 按键 | 功能 |
 |---|---|
-| `1–6` | 总览、CPU、GPU、内存、进程、传感器 |
+| `1–7` | 总览、CPU、GPU、内存、应用/进程、传感器、Docker |
 | `← / →` | 切换页面 |
-| `↑ / ↓` 或 `k / j` | 滚动页面 |
-| `PgUp / PgDn`、`Home / End` | 翻页、跳至开头 / 末尾 |
-| `c / m` | 进程页按 CPU / RSS 内存降序排列，并展示对应前 15 名 |
-| `p` | 暂停 / 恢复监测 |
-| `q` | 退出 |
+| `↑ / ↓` 或 `k / j` | 滚动；`PgUp/PgDn` 翻页，`Home/End` 跳至开头/末尾 |
+| `p` / `q` | 暂停监测 / 退出 |
+| `c / m` | 应用、进程或容器按 CPU / 内存排序 |
+| 应用页 `v` | 切换应用 / 独立进程，排行各显示前 15 名 |
+| 应用页 `n / b`、`Enter`、`Esc` | 选择应用、展开前 15 个成员、收起 |
+| Docker 页 `v` / `g` | 切换容器/项目视图；切换容器分组 |
+| Docker 页 `n / b`、`d` | 选择容器/项目；展开容器详情 |
+| Docker 项目视图 `Enter` / `Esc` | 展开 / 收起服务和已有容器 |
+| Docker 页 `o` | 打开所选容器操作面板 |
+| Docker 页 `l / i / x` | 临时日志 / 精简 inspect / 清除结果 |
+| Docker 页 `h` | 展开常用命令参考 |
 
-终端过小时显示尺寸提示；长页面可滚动。传感器只使用有依据的友好名称，未知或不可读数据不应当作真实零值。
+## Docker
 
-暂停时冻结界面并暂停常规监测；后台 powermetrics 进程仍继续运行。
+Docker 是可选功能，需要本机 Docker CLI 和可访问的引擎；当前已在 Mac mini / OrbStack 上实测，Docker Desktop 与 Colima 尚未实测。支持本地 Unix endpoint 的 context。
 
-`--dev` 只显示当前实时快照的来源、语义和状态，不写入历史记录或日志；正式运行不带此选项即可保持简洁界面。
+容器列表显示状态、CPU 和内存；详情包含镜像、端口、启动时间、重启次数及累计网络/块设备 I/O。后台采集至少间隔 3 秒，与主机刷新间隔独立。
 
-## 数据口径
+按 `o` 打开操作面板，用 `s/t/r/p/u` 选择启动、停止、重启、暂停或恢复。确认页默认取消，`Tab` 或左右键切换，`Enter` 确认，`Esc` 退出。停止或重启会中断服务；启动单个容器不会自动启动依赖服务。执行后会重新读取容器状态。
 
-- **CPU：** 以整机全部逻辑 CPU 时间 = 100% 计量，通过累计计数差分计算。18 核机器上，一个核心满载约为整机 5.6%；不按异构核心的实际计算能力加权。
-- **进程 CPU：** 以相邻采样间隔内累计 CPU 时间增量计算；首帧等待基线，不是进程启动以来的平均值。
-- **进程内存：** RSS（常驻物理内存），不是活动监视器的 footprint；共享页可能重复计入不同进程，不能简单求和。
-- **内存：** 区分实际系统压力与分类估算，不能仅用剩余内存百分比推断系统压力。
-- **温度：** CPU/GPU 主温度是对应有效探头的平均值，不是最高结温；探头支持取决于机型与映射。
-- **风扇：** 单位 RPM。有效 `0 RPM` 是停转，与无风扇或无法读取不同。
-- **磁盘：** APFS 容量采用容器口径，避免只统计系统只读卷。
-- **网络：** 以选定接口的累计计数差分计算；默认路由和 VPN 会影响接口选择，切换时需要重新建立基线。
-- **功率与频率：** 由 powermetrics 提供，依赖权限、系统能力和有效采样；缺失数据不等于空闲。
-- **GPU 与总功率：** 活跃驻留率是活跃时间比例，活跃频率是工作期间的频率；CPU + GPU + ANE 功率之和不是整机功耗。
-- **跨工具对照：** Stats 和活动监视器的同名指标不保证同一口径。对照时先看来源、统计窗口和定义，再判断数值是否接近；不能把任一工具当作所有字段的标准答案。
+`l` 读取最近最多 80 行日志，`i` 查看精简 inspect。结果只保存在当前会话内存；inspect 不包含环境变量、挂载和命令参数。容器日志可能包含业务信息，分享前请自行检查。
 
-## 测试
+Compose 项目/服务视图用于观察现有容器，不执行整组操作。更多设计见 [Docker Compose 设计](docs/DOCKER_COMPOSE_DESIGN.md)，单容器操作实现见 [docker_actions.py](macvitals/docker_actions.py)。sudo 启动时，Docker CLI 仍以原用户身份连接原来的引擎。
 
-无需打开交互界面即可获取两次采样后的诊断 JSON：
+## 指标怎么读
 
-```bash
-python3 -m macvitals --diagnose
-python3 -m macvitals --ioreport-probe
-sudo python3 -m macvitals --compare-probes
-sudo python3 validation/load_test.py
-```
+- **主机与 App CPU：** 全部逻辑核心合计为 100%；18 核机器上一个核心满载约占 5.6%。CPU 使用相邻采样的累计时间差，首帧建立基线。
+- **App 内存：** 使用 macOS footprint 汇总成员，包含压缩内存等系统记账项目。应用按完整包路径区分，系统责任进程接口补充 XPC 归属；未归属任务可在进程视图查看。`≥` 为部分成员合计，`--` 为等待或未读值。
+- **RSS 降级：** 原生进程采集不可用时，进程视图回退 `ps` CPU/RSS，暂不提供应用聚合。
+- **Docker CPU/内存：** CPU 100% 约为一个虚拟核，可超过 100%；内存采用 Docker CLI 的缓存扣减口径，上限来自容器或引擎。它们与主机指标使用不同分母。
+- **温度与风扇：** CPU/GPU 温度为已识别探头平均值，风扇以 RPM 显示；探头随机型而异。
+- **功率：** CPU + GPU + ANE 为计算单元功率合计；整机功耗还包含其他部件。
+- **系统内存：** 结合内存压力与交换空间判断紧张程度；分类数值包含估算。
 
-诊断输出省略进程名和命令行，包含硬件与采集能力信息；不可用数值为 `null`。特权诊断需在自己的终端中运行 `sudo python3 -m macvitals --diagnose` 并按提示输入密码。
+## 验证与诊断
 
-`--ioreport-probe` 是独立的只读开发探针，会对 CPU performance states、Energy Model 和 DCP swap 做两次短采样并输出差分摘要。IOReport 是不稳定的系统接口；探针结果只用于和 `powermetrics` 做定义与窗口对照，不接入正式界面，也不保存历史。
-
-`--compare-probes` 需要管理员权限，会在同一次短采样期间启动 `powermetrics` 和 IOReport，并输出一份一次性的对照 JSON。CPU residency、活跃频率和功率仍按各自定义解释，不会强行合并成活动监视器口径。
+1.5.0 在本机与 Mac mini 均通过 135 项自动测试，包括 App 聚合、时间基准换算、PID 重用、Docker 解析与操作确认，以及三种 TERM 的真实终端缩放。18 核 Mac 的单核测试测得 5.53%，理论值为 5.56%；Mac mini / OrbStack 的隔离测试容器通过启动、重启、停止并完成清理。
 
 ```bash
 python3 -m unittest discover -s tests -v
+macvitals --diagnose
 ```
 
-44 项自动测试通过，包含分块颜色与列边界、开发版元数据、IOReport 摘要与对照逻辑、真实伪终端中的缩放、六页切换、排序、暂停与退出。当前复盘设备为 Apple M5 Pro（Mac17,8，18 核、64 GiB，macOS 26.6.2）；这不等于所有机型已实测。管理员模式下还完成了基线约 9%、单核、多核、恢复四阶段负载验证，以及 powermetrics 中止后的降级验证；这些检查只在内存中运行，不写历史或日志。1.3.2 已完成管理员模式同帧比对及 0.5/1 秒连续采样验证，并修复诊断过早结束导致特权字段缺失的问题。
+诊断 JSON 包含硬件、来源与采集覆盖计数，省略应用/进程名称、命令行和容器身份。开发对照探针使用 `--ioreport-probe`、`--compare-probes`；历史硬件验证见 [validation](validation/) 和 [更新记录](CHANGELOG.md)。
 
-特权验证见 [实测记录](validation/2026-09-21-m5-pro-privileged.json)，可用 `sudo python3 validation/verify_live.py` 重现（包含约两秒单核负载）。P0/P1/S 集群频率、GPU 活跃率、CPU/GPU/ANE 功率和热压力与同帧原始输出一致；单核负载约占整机 5.56%。GPU 功率采用 CPU/GPU/ANE 汇总段读数，GPU 详情段可能略有差异，不重复累加。温度是已识别测点的平均值，风扇为 SMC 转速；本轮不构成探头物理校准或功率仪校验。
+## 兼容与贡献
 
-普通权限采样记录见 [实机诊断 JSON](validation/2026-09-21-m5-pro.json)，更新说明见 [CHANGELOG](CHANGELOG.md)。这些是当时的验证记录，动态读数会变化。
+MacVitals 主要面向 Apple Silicon。不同芯片和 macOS 版本提供的传感器、核心拓扑与 powermetrics 字段有所不同；Ultra 系列仍欢迎社区补充实机反馈。
 
-已验证临时虚拟环境中的 wheel 安装和命令入口，以及 `xterm-256color`、`xterm`、`vt100` 真实伪终端的六页浏览、窗口缩放、排序、暂停与退出。
+发现问题欢迎提交 Issue 或 Pull Request，附上芯片型号、macOS 版本、脱敏后的 `--diagnose` 和复现步骤。贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全问题见 [SECURITY.md](SECURITY.md)。
 
-## 兼容性与贡献
+## 许可证
 
-项目主要面向 Apple Silicon。当前代码已在多台 Apple Silicon Mac 上验证，但不同芯片、Pro/Max/Ultra、风扇配置和 macOS 版本可能提供不同的传感器键、powermetrics 字段和核心拓扑。Ultra 系列目前没有本地实机验证，不把“代码能够运行”表述为“已完成 Ultra 兼容认证”。
+当前提供 Python 源码版，使用系统接口采集，不控制风扇或修改散热策略。
 
-如果你在另一台 Mac 上发现传感器映射、核心拓扑或系统命令格式问题，欢迎提交 Issue 或 Pull Request。请在报告中提供 macOS 版本、芯片型号、脱敏后的 `--diagnose` 输出和复现步骤；不要上传 sudo 密码、进程名称、个人路径或其他敏感信息。硬件映射类改动需要附带证据并保持未知值语义，合并前会逐项审核。
-
-贡献细则见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全问题请先阅读 [SECURITY.md](SECURITY.md)。
-
-## 项目边界
-
-本项目是实时观察工具，不控制风扇或修改系统散热策略。当前正式发行形态是 Python 源码版，不提供内置 Python 的 `.app` 或 DMG；未来是否制作独立版取决于目标 Mac 缺少 Python 是否成为实际部署障碍。许可证见 [LICENSE](LICENSE)：允许免费非商业使用，禁止商业收费；对外发布的修改版必须公开完整源码并继续使用相同条件。该许可证是项目专用的源码公开许可证，不是 OSI 认证的 Open Source License。
-
-项目完整中文说明另同步到个人 Obsidian 库的 `Project/MacVitals`，包含产品说明、架构与算法、测试发布、兼容路线图和作品网站文案。该同步为文档快照，没有自动后台更新服务。
+[MacVitals Non-Commercial Share-Alike License](LICENSE) 允许免费非商业使用；对外发布修改版须公开完整源码并延续相同许可，禁止商业收费。它是项目专用的源码公开许可证，不是 OSI 认证的开源许可证。
